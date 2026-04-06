@@ -16,7 +16,7 @@ byte colPins[COLS] = {A0,15,14,16,10,9};
 unsigned long previousMillis = 0;
 int count = 0;
 
-// --- NEW STATE VARIABLES ---
+// --- STATE VARIABLES ---
 int currentProfile = 0; // 0 for Profile A, 1 for Profile B
 int animationState = 0; // 0 = Custom Profile, 1 = Shooting Star, 2 = White, 3 = Black
 int brightness = 100;
@@ -45,19 +45,6 @@ int ledIDs[6][6] =    {{35,34,33,32,31,30},
                        {11,10,9,8,7,6},
                        {0,1,2,3,4,5}};
 
-void setup() {
-  for(int i = 0; i < ROWS; i++) pinMode(rowPins[i], INPUT_PULLUP);
-  for(int i = 0; i < COLS; i++) pinMode(colPins[i], OUTPUT);
-
-  FastLED.addLeds<WS2812B, DATA_PIN, GRB>(leds, NUM_LEDS);
-  FastLED.setBrightness(brightness);
-  
-  Serial.begin(9600); // Web Serial Configurator
-  Joystick.begin();
-
-  loadFromEEPROM(); // Load saved colors on boot
-}
-
 void loadFromEEPROM() {
   // EEPROM Address mapping: 0-95 for Profile 0, 100-195 for Profile 1
   for(int p = 0; p < 2; p++) {
@@ -79,6 +66,51 @@ void saveToEEPROM() {
       EEPROM.update(startAddr + (i*3) + 2, profileColors[p][i].b);
     }
   }
+}
+
+void startupBurst() {
+  // A shockwave of colors: White core, Cyan middle, Blue edge fading to black
+  CRGB waveColors[4] = {CRGB::White, CRGB::Cyan, CRGB::Blue, CRGB::Black};
+  
+  FastLED.clear();
+  FastLED.show();
+  delay(200); // Brief pause before the burst
+
+  // 6 steps allows the wave to fully expand and fade out
+  for(int step = 0; step < 6; step++) {
+    for (int r = 0; r < 6; r++) {
+      for (int c = 0; c < 6; c++) {
+        // Calculate which "Ring" the current LED is in (0=center, 1=middle, 2=outer)
+        int rDist = (r < 3) ? (2 - r) : (r - 3);
+        int cDist = (c < 3) ? (2 - c) : (c - 3);
+        int ring = max(rDist, cDist);
+        
+        // Calculate the color "age" for this specific ring
+        int age = step - ring;
+        if (age >= 0 && age < 4) {
+           leds[ledIDs[r][c]] = waveColors[age];
+        } else {
+           leds[ledIDs[r][c]] = CRGB::Black;
+        }
+      }
+    }
+    FastLED.show();
+    delay(100); // Speed of the ripple
+  }
+}
+
+void setup() {
+  for(int i = 0; i < ROWS; i++) pinMode(rowPins[i], INPUT_PULLUP);
+  for(int i = 0; i < COLS; i++) pinMode(colPins[i], OUTPUT);
+
+  FastLED.addLeds<WS2812B, DATA_PIN, GRB>(leds, NUM_LEDS);
+  FastLED.setBrightness(brightness);
+  
+  Serial.begin(9600); // Web Serial Configurator
+  Joystick.begin();
+
+  loadFromEEPROM(); // Load saved colors on boot
+  startupBurst();   // Fire the radial animation!
 }
 
 // Format: <SET,profile,id,r,g,b> or <SYNC> or <FLASH,r,g,b>
@@ -124,7 +156,6 @@ void parseData() {
         } 
         else if (strcmp(strtokIndx, "SYNC") == 0) {
             saveToEEPROM();
-            // Flash entire board green to confirm save
             fill_solid(leds, NUM_LEDS, CRGB::Green);
             FastLED.show();
             delay(500);
@@ -142,7 +173,6 @@ void parseData() {
 }
 
 void applyCurrentProfile() {
-  // Use the matrices to map the logical button ID to the correct physical LED
   for(int i = 0; i < COLS; i++){
     for(int j = 0; j < ROWS; j++){
       int bID = buttonIDs[i][j];
@@ -155,7 +185,6 @@ void applyCurrentProfile() {
 }
 
 void drawHardwareButtons() {
-  // Always keep the hardware control buttons illuminated
   for(int i = 0; i < COLS; i++){
     for(int j = 0; j < ROWS; j++){
       int bID = buttonIDs[i][j];
@@ -190,21 +219,18 @@ void loop() {
   recvWithStartEndMarkers();
   parseData();
 
-  // --- 4-STATE ANIMATION LOGIC ---
   if (animationState == 0) {
     applyCurrentProfile();
   } else if (animationState == 1) {
     shootingStarAnimation(0, 255, 255, 30, 20, 2000, 1);
   } else if (animationState == 2) {
-    fill_solid(leds, NUM_LEDS, CRGB::White); // Full White
+    fill_solid(leds, NUM_LEDS, CRGB::White); 
   } else if (animationState == 3) {
-    fill_solid(leds, NUM_LEDS, CRGB::Black); // Full Black (Off)
+    fill_solid(leds, NUM_LEDS, CRGB::Black); 
   }
   
-  // Overwrite the animation/profile to ensure hardware buttons are always visible
   drawHardwareButtons();
 
-  // Scan Matrix
   for(int i = 0; i < COLS; i++){
     digitalWrite(colPins[i], LOW);
     for(int j = 0; j < ROWS; j++){
@@ -214,21 +240,21 @@ void loop() {
 
       if(currentButtonState != lastButtonState[i][j]){
         
-        // --- STANDARD BUTTONS (Send to PC) ---
+        // --- STANDARD BUTTONS ---
         if(bID < 32) {
           Joystick.setButton(bID, currentButtonState);
         } 
-        // --- HARDWARE CONTROLS (Do NOT send to PC) ---
+        // --- HARDWARE CONTROLS ---
         else if (currentButtonState == 1) { 
            if(bID == 32) { brightness = max(10, brightness - 20); FastLED.setBrightness(brightness); }
            else if(bID == 33) { brightness = min(255, brightness + 20); FastLED.setBrightness(brightness); }
-           else if(bID == 34) { animationState = (animationState + 1) % 4; } // Cycle 0 -> 1 -> 2 -> 3 -> 0
+           else if(bID == 34) { animationState = (animationState + 1) % 4; } 
            else if(bID == 35) { currentProfile = !currentProfile; } 
         }
         lastButtonState[i][j] = currentButtonState;
       }
       
-      // Visual feedback when pressed (turns Cyan temporarily)
+      // Press Feedback
       if(currentButtonState == 1 && bID < 32){
         leds[lID] = CRGB::Cyan; 
       }
