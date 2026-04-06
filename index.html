@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2283 Launchpad Configurator</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --panel-bg: #1e1e1e;
+            --text-color: #ffffff;
+            --accent-color: #00adb5;
+            --hardware-btn: #333333;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            text-align: center;
+            margin: 0;
+            padding: 20px;
+        }
+
+        h1 { margin-bottom: 5px; letter-spacing: 1px; }
+        .subtitle { color: #888; font-size: 14px; margin-bottom: 20px; }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: var(--panel-bg);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.5);
+        }
+
+        .toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: center;
+            margin-bottom: 20px;
+            width: 100%;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #333;
+        }
+
+        button, select, input[type="color"] {
+            background-color: #2c2c2c;
+            color: white;
+            border: 1px solid #444;
+            padding: 10px 15px;
+            border-radius: 6px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        button:hover, select:hover { background-color: #3a3a3a; border-color: var(--accent-color); }
+        
+        #connectBtn { background-color: #b71c1c; font-weight: bold; }
+        #connectBtn.connected { background-color: #1b5e20; }
+
+        .sync-btn {
+            background-color: var(--accent-color);
+            color: #000;
+            font-weight: bold;
+            font-size: 16px;
+            width: 100%;
+            margin-top: 20px;
+        }
+        .sync-btn:hover { background-color: #008c9e; }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(6, 70px);
+            gap: 8px;
+            justify-content: center;
+            margin-top: 10px;
+            padding: 15px;
+            background-color: #0a0a0a;
+            border-radius: 10px;
+            border: 2px solid #333;
+        }
+
+        .btn {
+            width: 70px;
+            height: 70px;
+            border: 2px solid #222;
+            border-radius: 8px;
+            cursor: pointer;
+            background-color: #000000;
+            box-shadow: inset 0 0 10px rgba(0,0,0,0.8);
+            transition: transform 0.1s, border-color 0.2s;
+        }
+
+        .btn:active { transform: scale(0.95); }
+        .btn:hover { border-color: #fff; }
+
+        .hardware-btn {
+            background-color: var(--hardware-btn);
+            cursor: not-allowed;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: bold;
+            color: #aaa;
+            border-color: #444;
+        }
+        .hardware-btn:hover { border-color: #444; }
+
+        .color-picker-wrapper { display: flex; align-items: center; gap: 10px; }
+        input[type="color"] { padding: 0; width: 40px; height: 40px; border: none; }
+
+    </style>
+</head>
+<body>
+
+    <h1>🎮 2283 Launchpad Configurator</h1>
+    <div class="subtitle">Custom FRC Drive Station Button Matrix</div>
+
+    <div class="container">
+        
+        <div class="toolbar">
+            <button id="connectBtn" onclick="connectSerial()">🔌 Connect to Board</button>
+            
+            <select id="profileSelect">
+                <option value="0">Profile A (Match)</option>
+                <option value="1">Profile B (Testing)</option>
+            </select>
+        </div>
+
+        <div class="toolbar">
+            <div class="color-picker-wrapper">
+                <label for="colorPicker">Paint Color:</label>
+                <input type="color" id="colorPicker" value="#00adb5">
+            </div>
+            <button onclick="fillAll()">⬛ Fill All</button>
+            <button onclick="clearAll()">❌ Clear All</button>
+        </div>
+
+        <p style="font-size: 13px; color: #aaa; margin: 0;">Select a color, then click a grid square to paint it.</p>
+
+        <div class="grid" id="buttonGrid"></div>
+
+        <button class="sync-btn" onclick="syncToBoard()">💾 Save to Board Memory</button>
+    </div>
+
+    <script>
+        let port;
+        let writer;
+
+        // Check for Web Serial API support
+        if (!("serial" in navigator)) {
+            alert("Your browser does not support the Web Serial API. Please use Google Chrome or Microsoft Edge.");
+        }
+
+        // Create 6x6 Grid (36 buttons)
+        const grid = document.getElementById('buttonGrid');
+        for (let i = 0; i < 36; i++) {
+            let btn = document.createElement('div');
+            btn.className = 'btn';
+            btn.id = 'btn-' + i;
+            
+            // Last 4 buttons are hardware controls (IDs 32, 33, 34, 35)
+            if(i >= 32) {
+                btn.classList.add('hardware-btn');
+                let labels = ["Dim -", "Bright +", "Anim Mode", "Swap Prof"];
+                btn.innerText = labels[i-32];
+            } else {
+                btn.onclick = () => updateColor(i);
+            }
+            grid.appendChild(btn);
+        }
+
+        async function connectSerial() {
+            try {
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 9600 });
+                const textEncoder = new TextEncoderStream();
+                textEncoder.readable.pipeTo(port.writable);
+                writer = textEncoder.writable.getWriter();
+                
+                let btn = document.getElementById('connectBtn');
+                btn.innerText = "✅ Connected";
+                btn.classList.add("connected");
+            } catch (err) {
+                console.error(err);
+                alert("Failed to connect. Make sure no other program (like the Arduino IDE Serial Monitor) is using the port.");
+            }
+        }
+
+        function hexToRgb(hex) {
+            let result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? {
+                r: parseInt(result[1], 16),
+                g: parseInt(result[2], 16),
+                b: parseInt(result[3], 16)
+            } : { r: 0, g: 0, b: 0 };
+        }
+
+        async function sendCommand(command) {
+            if (!writer) {
+                alert("Please connect to the board first!");
+                return false;
+            }
+            await writer.write(command);
+            return true;
+        }
+
+        async function updateColor(id, overrideHex = null) {
+            let colorHex = overrideHex || document.getElementById('colorPicker').value;
+            let rgb = hexToRgb(colorHex);
+            let profile = document.getElementById('profileSelect').value;
+            
+            // Format: <SET,profile,id,r,g,b>
+            let command = `<SET,${profile},${id},${rgb.r},${rgb.g},${rgb.b}>`;
+            
+            let success = await sendCommand(command);
+            if(success) {
+                document.getElementById('btn-' + id).style.backgroundColor = colorHex;
+            }
+        }
+
+        async function fillAll() {
+            let colorHex = document.getElementById('colorPicker').value;
+            // Send commands with a slight delay to avoid flooding the 9600 baud serial buffer
+            for (let i = 0; i < 32; i++) {
+                await updateColor(i, colorHex);
+                await new Promise(r => setTimeout(r, 20)); // 20ms delay
+            }
+        }
+
+        async function clearAll() {
+            for (let i = 0; i < 32; i++) {
+                await updateColor(i, "#000000");
+                await new Promise(r => setTimeout(r, 20)); 
+            }
+        }
+
+        async function syncToBoard() {
+            // Format: <SYNC> tells Arduino to write current array to EEPROM
+            let success = await sendCommand("<SYNC>");
+            if(success) {
+                alert("Saved successfully! The board will remember these colors the next time it plugs in.");
+            }
+        }
+    </script>
+</body>
+</html>
