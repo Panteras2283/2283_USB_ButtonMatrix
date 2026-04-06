@@ -20,6 +20,7 @@ int count = 0;
 int currentProfile = 0; // 0 for Profile A, 1 for Profile B
 int animationState = 0; // 0 = Custom Profile, 1 = Shooting Star, 2 = White, 3 = Black
 int brightness = 100;
+int currentRumble = 0;  // 0 = off, 1-100 = intensity
 
 // Stored colors for 32 buttons across 2 profiles. 
 CRGB profileColors[2][32]; 
@@ -113,7 +114,7 @@ void setup() {
   startupBurst();   // Fire the radial animation!
 }
 
-// Format: <SET,profile,id,r,g,b> or <SYNC> or <FLASH,r,g,b>
+// Format: <SET,profile,id,r,g,b> or <SYNC> or <FLASH,r,g,b> or <RUMBLE,intensity>
 void recvWithStartEndMarkers() {
     static boolean recvInProgress = false;
     static byte ndx = 0;
@@ -168,6 +169,12 @@ void parseData() {
             FastLED.show();
             delay(300); // Quick flash
         }
+        else if (strcmp(strtokIndx, "RUMBLE") == 0) {
+            currentRumble = atoi(strtok(NULL, ",")); // Read 0 to 100
+            // Clamp value just in case
+            if (currentRumble < 0) currentRumble = 0;
+            if (currentRumble > 100) currentRumble = 100;
+        }
         newData = false;
     }
 }
@@ -215,11 +222,37 @@ void shootingStarAnimation(int red, int green, int blue, int tail_length, int de
   delay(delay_duration);
 }
 
+void handleVisualRumble() {
+  if (currentRumble <= 0) return; // Failsafe
+
+  // 1. Map intensity (1 to 100) to FastLED Hue (192 to 0)
+  // 192 = Purple, 96 = Green, 0 = Red
+  byte currentHue = map(currentRumble, 1, 100, 192, 0);
+
+  // Create the color using HSV (Hue, Saturation: 255, Value: 255)
+  // Note: Value is 255 because FastLED.setBrightness() handles the actual dimming globally!
+  CRGB rumbleColor = CHSV(currentHue, 255, 255);
+
+  // 2. Blink Logic (Blinks faster as intensity increases)
+  // Maps 1-100 intensity to a 400ms (slow) to 50ms (fast) blink delay
+  int blinkSpeed = map(currentRumble, 1, 100, 400, 50); 
+  
+  if ((millis() / blinkSpeed) % 2 == 0) {
+    fill_solid(leds, NUM_LEDS, rumbleColor); // ON
+  } else {
+    fill_solid(leds, NUM_LEDS, CRGB::Black); // OFF
+  }
+}
+
 void loop() {
   recvWithStartEndMarkers();
   parseData();
 
-  if (animationState == 0) {
+  // --- ANIMATION / RUMBLE OVERRIDES ---
+  if (currentRumble > 0) {
+    handleVisualRumble();
+  } 
+  else if (animationState == 0) {
     applyCurrentProfile();
   } else if (animationState == 1) {
     shootingStarAnimation(0, 255, 255, 30, 20, 2000, 1);
@@ -229,6 +262,7 @@ void loop() {
     fill_solid(leds, NUM_LEDS, CRGB::Black); 
   }
   
+  // Hardware buttons are drawn last so they overlay the rumble/animations!
   drawHardwareButtons();
 
   for(int i = 0; i < COLS; i++){
@@ -254,7 +288,7 @@ void loop() {
         lastButtonState[i][j] = currentButtonState;
       }
       
-      // Press Feedback
+      // Press Feedback (Turns pressed buttons Cyan)
       if(currentButtonState == 1 && bID < 32){
         leds[lID] = CRGB::Cyan; 
       }
